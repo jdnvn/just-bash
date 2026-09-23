@@ -54,6 +54,7 @@ describe("nested execution in streaming pipelines", () => {
       finish();
     }
   });
+
   it("falls back when sibling pipelines fill the remaining stage capacity", async () => {
     const nested = defineCommand(
       "nested",

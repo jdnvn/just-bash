@@ -100,6 +100,7 @@ describe("BytePipe", () => {
     );
     expect(scope.remainingLiveBytes).toBe(2);
   });
+
   it("does not fail an acknowledged write when the reader subsequently closes", async () => {
     const pipe = new BytePipe(new ExecutionScope(resolveLimits()));
     const writing = pipe.write(unsafeBytesFromLatin1("x"));

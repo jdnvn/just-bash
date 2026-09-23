@@ -121,6 +121,7 @@ describe("streaming pipelines", () => {
     expect(result.stderr).toBe("");
     expect(result.exitCode).toBe(0);
   });
+
   it("cancels every stage when the execution is aborted", async () => {
     const controller = new AbortController();
     let started!: () => void;
@@ -219,6 +220,7 @@ describe("streaming pipelines", () => {
     expect(result.stderr).toBe("");
     expect(result.exitCode).toBe(0);
   });
+
   it("preserves nested execution accounting for legacy extensions", async () => {
     const producer = defineCommand("producer", async (_args, ctx) => {
       if (!ctx.exec) throw new Error("Expected exec");
