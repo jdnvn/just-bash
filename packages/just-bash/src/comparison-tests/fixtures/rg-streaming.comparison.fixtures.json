@@ -1,0 +1,132 @@
+{
+  "021b5d2eaf9e047c": {
+    "command": "rg --sort path -l pattern tree | head -2",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "tree/a.txt\ntree/c.txt\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "07b8b8d2f9b462d8": {
+    "command": "rg pattern tree/a.txt | cat",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "pattern héllo\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "4bed54f8dd4c1fae": {
+    "command": "printf 'pattern\n' | rg -f - tree/a.txt | cat",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "pattern héllo\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "527492615c60621d": {
+    "command": "rg --sort path --files --hidden tree | head -4",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "tree/.hidden.txt\ntree/a.txt\ntree/b.txt\ntree/c.txt\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "5399eb701a6c955b": {
+    "command": "rg --sort path -c pattern tree | cat",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "tree/a.txt:1\ntree/c.txt:1\ntree/d/b.txt:1\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "7c00df9f225e8bfd": {
+    "command": "rg --sort path --files-without-match pattern tree | cat",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "tree/b.txt\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "aaafab586a2bb7b2": {
+    "command": "rg --sort path -n pattern tree | head -3",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "tree/a.txt:2:pattern héllo\ntree/c.txt:1:pattern\ntree/d/b.txt:1:pattern\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "c25f703914557486": {
+    "command": "rg --sort path -n -I pattern tree | cat",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "2:pattern héllo\n1:pattern\n1:pattern\n",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "e128ec03614ef451": {
+    "command": "rg --sort path --files -0 tree | cat",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "tree/a.txt\u0000tree/b.txt\u0000tree/c.txt\u0000tree/d/b.txt\u0000",
+    "stderr": "",
+    "exitCode": 0
+  },
+  "f4a8a3abf002208c": {
+    "command": "rg --sort path -n -C 1 pattern tree/a.txt | cat",
+    "files": {
+      "tree/.hidden.txt": "pattern\n",
+      "tree/a.txt": "before\npattern héllo\nafter\n",
+      "tree/d/b.txt": "pattern\n",
+      "tree/b.txt": "no match\n",
+      "tree/c.txt": "pattern\n"
+    },
+    "stdout": "1-before\n2:pattern héllo\n3-after\n",
+    "stderr": "",
+    "exitCode": 0
+  }
+}

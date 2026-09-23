@@ -763,8 +763,19 @@ stderr remains collected in
 output limit.
 
 The initial command support streams plain `cat` stdin, `head` stdin, and `seq`
-without `-w`. Existing bundled commands can participate through a bounded whole-input
-adapter. Custom commands must opt in before any pipeline containing them can stream. File reads and formatting variants retain their existing buffering.
+without `-w`. For a single search path (including the default current directory),
+`rg` discovers files incrementally and writes one file’s results at a time. This
+lets `rg --files --hidden /mnt/Home | head -4` stop directory traversal and
+`rg -l pattern /mnt/Home | head -200` stop reading further files. Path ordering,
+ignore rules, and file filters are preserved. A file search may read one extra
+file before the closed pipe is observed.
+
+`rg` still buffers each directory listing and each searched file. Searches with
+multiple paths, `--json`, `--stats`, or combined `--quiet --files-without-match`
+retain the existing collection path; searching stdin also buffers its input.
+Existing bundled commands can participate through a bounded whole-input adapter.
+Custom commands must opt in before any pipeline containing them can stream.
+Other file reads and formatting variants retain their existing buffering.
 Pipe reservations share the execution’s live byte budget; final output,
 collected legacy input, transferred input, work, and deadlines remain bounded.
 

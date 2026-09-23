@@ -6,6 +6,7 @@ import { gunzipSync } from "node:zlib";
 import { BoundedStringBuilder } from "../../bounded-builder.js";
 import {
   decodeBytesToUtf8,
+  encodeUtf8ToBytes,
   latin1FromBytes,
   readBytesFrom,
   unsafeBytesFromLatin1,
@@ -13,10 +14,12 @@ import {
 } from "../../encoding.js";
 import type { ResourceLease } from "../../execution-scope.js";
 import { rethrowFatalExecutionError } from "../../fatal-execution-error.js";
+import type { FsStat } from "../../fs/interface.js";
 import { FileTraversalBudget } from "../../fs/traversal.js";
 import { shellJoinArgs } from "../../helpers/shell-quote.js";
 import { ExecutionLimitError } from "../../interpreter/errors.js";
 import { createUserRegex, type UserRegex } from "../../regex/index.js";
+import { readCommandStdin } from "../../streams/command-stdio.js";
 import type { ExecResult, RuntimeCommandContext } from "../../types.js";
 import {
   buildRegex,
@@ -162,6 +165,7 @@ export async function executeSearch(
   // decoded lines remain live until regex compilation completes, so keep a
   // conservative lease for every source and release all of them together.
   const patterns = options.patterns.slice();
+  let patternStdin: Awaited<ReturnType<typeof readCommandStdin>> | undefined;
   const patternSourceLeases: ResourceLease[] = [];
   let aggregatePatternInputBytes = 0;
   let regex: UserRegex;
@@ -177,8 +181,9 @@ export async function executeSearch(
         let contentBytes: number;
 
         if (patternFile === "-") {
-          rawContent = ctx.stdin;
-          contentBytes = latin1FromBytes(ctx.stdin).length;
+          patternStdin ??= await readCommandStdin(ctx);
+          rawContent = patternStdin;
+          contentBytes = latin1FromBytes(rawContent).length;
           aggregatePatternInputBytes = accountPatternInput(
             ctx,
             contentBytes,
@@ -269,7 +274,10 @@ export async function executeSearch(
   // Skip when `-f -` already consumed stdin for patterns to avoid
   // double-consuming it as both pattern source and search input.
   const stdinConsumedByPatternFile = options.patternFiles.includes("-");
-  const stdinText = decodeBytesToUtf8(ctx.stdin);
+  const stdinText =
+    inputPaths.length === 0 && !stdinConsumedByPatternFile
+      ? decodeBytesToUtf8(await readCommandStdin(ctx))
+      : "";
   if (
     inputPaths.length === 0 &&
     stdinText.length > 0 &&
@@ -349,6 +357,41 @@ export async function executeSearch(
   }
   for (const spec of options.typeAdd) {
     typeRegistry.addType(spec);
+  }
+
+  if (
+    ctx.stdio &&
+    paths.length === 1 &&
+    !options.json &&
+    !options.stats &&
+    !(options.quiet && options.filesWithoutMatch)
+  ) {
+    const stdio = ctx.stdio;
+    let exitCode = 1;
+    await visitStreamingPath(
+      ctx,
+      paths[0],
+      options,
+      gitignore,
+      typeRegistry,
+      async (file, singleExplicitFile) => {
+        const result = await searchFiles(
+          ctx,
+          [file],
+          regex,
+          options,
+          !options.noFilename && (options.withFilename || !singleExplicitFile),
+          options.lineNumber &&
+            (explicitLineNumbers ||
+              (!singleExplicitFile && !options.onlyMatching)),
+          kResetGroup,
+        );
+        if (result.exitCode === 0) exitCode = 0;
+        if (result.stdout) await stdio.write(encodeUtf8ToBytes(result.stdout));
+        return !(options.quiet && exitCode === 0);
+      },
+    );
+    return { stdout: "", stderr: "", exitCode };
   }
 
   // Collect files to search
@@ -438,6 +481,53 @@ function buildSearchRegex(
   });
 }
 
+async function visitStreamingPath(
+  ctx: RuntimeCommandContext,
+  path: string,
+  options: RgOptions,
+  gitignore: GitignoreManager | null,
+  typeRegistry: FileTypeRegistry,
+  visit: (file: string, singleExplicitFile: boolean) => Promise<boolean>,
+): Promise<void> {
+  const fullPath = ctx.fs.resolvePath(ctx.cwd, path);
+  let stat: FsStat;
+  try {
+    stat = await ctx.fs.stat(fullPath);
+  } catch (error) {
+    rethrowFatalExecutionError(error);
+    return;
+  }
+  if (stat.isFile) {
+    if (
+      (options.maxFilesize <= 0 || stat.size <= options.maxFilesize) &&
+      shouldIncludeFile(path, options, gitignore, fullPath, typeRegistry)
+    ) {
+      await visit(path, true);
+    }
+  } else if (stat.isDirectory) {
+    const budget = new FileTraversalBudget({
+      limits: ctx.limits,
+      signal: ctx.signal,
+      executionScope: ctx.executionScope,
+      site: "rg",
+    });
+    for await (const file of walkDirectory(
+      ctx,
+      path,
+      fullPath,
+      0,
+      options,
+      gitignore,
+      typeRegistry,
+      budget,
+      new Set(),
+      options.sort === "path",
+    )) {
+      if (!(await visit(file, false))) break;
+    }
+  }
+}
+
 interface CollectFilesResult {
   files: string[];
   singleExplicitFile: boolean;
@@ -489,7 +579,7 @@ async function collectFiles(
         }
       } else if (stat.isDirectory) {
         directoryCount++;
-        await walkDirectory(
+        for await (const file of walkDirectory(
           ctx,
           path,
           fullPath,
@@ -497,10 +587,17 @@ async function collectFiles(
           options,
           gitignore,
           typeRegistry,
-          files,
           traversalBudget,
           new Set(),
-        );
+        )) {
+          if (files.length >= ctx.limits.maxArrayElements) {
+            throw new ExecutionLimitError(
+              `rg: file collection limit exceeded (${ctx.limits.maxArrayElements})`,
+              "array_elements",
+            );
+          }
+          files.push(file);
+        }
       }
     } catch (error) {
       rethrowFatalExecutionError(error);
@@ -516,10 +613,7 @@ async function collectFiles(
   };
 }
 
-/**
- * Recursively walk a directory and collect matching files
- */
-async function walkDirectory(
+async function* walkDirectory(
   ctx: RuntimeCommandContext,
   relativePath: string,
   absolutePath: string,
@@ -527,10 +621,10 @@ async function walkDirectory(
   options: RgOptions,
   gitignore: GitignoreManager | null,
   typeRegistry: FileTypeRegistry,
-  files: string[],
   budget: FileTraversalBudget,
   activeDirectories: Set<string>,
-): Promise<void> {
+  sortEntries = false,
+): AsyncGenerator<string> {
   if (depth >= options.maxDepth) {
     return;
   }
@@ -566,6 +660,40 @@ async function walkDirectory(
           name,
           isFile: undefined as boolean | undefined,
         }));
+
+    if (sortEntries) {
+      if (entries.length > ctx.limits.maxArrayElements) {
+        throw new ExecutionLimitError(
+          `rg: directory entry limit exceeded (${ctx.limits.maxArrayElements})`,
+          "array_elements",
+        );
+      }
+      const keys = new Map<string, string>();
+      for (const entry of entries) {
+        budget.checkpoint();
+        let isDirectory = "isDirectory" in entry && entry.isDirectory === true;
+        if (
+          entry.isFile === undefined ||
+          (options.followSymlinks &&
+            "isSymbolicLink" in entry &&
+            entry.isSymbolicLink)
+        ) {
+          try {
+            isDirectory = (
+              await ctx.fs.stat(ctx.fs.resolvePath(absolutePath, entry.name))
+            ).isDirectory;
+          } catch (error) {
+            rethrowFatalExecutionError(error);
+          }
+        }
+        keys.set(entry.name, entry.name + (isDirectory ? "/" : ""));
+      }
+      entries.sort((a, b) => {
+        const left = keys.get(a.name) as string;
+        const right = keys.get(b.name) as string;
+        return left < right ? -1 : left > right ? 1 : 0;
+      });
+    }
 
     for (const entry of entries) {
       budget.checkpoint();
@@ -671,7 +799,7 @@ async function walkDirectory(
       }
 
       if (isDirectory) {
-        await walkDirectory(
+        yield* walkDirectory(
           ctx,
           entryRelativePath,
           entryAbsolutePath,
@@ -679,9 +807,9 @@ async function walkDirectory(
           options,
           gitignore,
           typeRegistry,
-          files,
           budget,
           activeDirectories,
+          sortEntries,
         );
       } else if (isFile) {
         budget.visit(depth + 1);
@@ -705,13 +833,7 @@ async function walkDirectory(
             typeRegistry,
           )
         ) {
-          if (files.length >= ctx.limits.maxArrayElements) {
-            throw new ExecutionLimitError(
-              `rg: file collection limit exceeded (${ctx.limits.maxArrayElements})`,
-              "array_elements",
-            );
-          }
-          files.push(entryRelativePath);
+          yield entryRelativePath;
         }
       }
     }
@@ -905,6 +1027,27 @@ async function listFiles(
 
   // Default to current directory
   const paths = inputPaths.length === 0 ? ["."] : inputPaths;
+
+  if (ctx.stdio && paths.length === 1) {
+    const stdio = ctx.stdio;
+    let exitCode = 1;
+    await visitStreamingPath(
+      ctx,
+      paths[0],
+      options,
+      gitignore,
+      typeRegistry,
+      async (file) => {
+        exitCode = 0;
+        if (options.quiet) return false;
+        await stdio.write(
+          encodeUtf8ToBytes(file + (options.nullSeparator ? "\0" : "\n")),
+        );
+        return true;
+      },
+    );
+    return { stdout: "", stderr: "", exitCode };
+  }
 
   // Collect files
   const { files } = await collectFiles(
