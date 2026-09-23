@@ -1,3 +1,4 @@
+import { executeStreamingPipeline } from "./streaming-pipeline.js";
 /**
  * Interpreter - AST Execution Engine
  *
@@ -155,7 +156,10 @@ export interface InterpreterOptions {
 export class Interpreter {
   private ctx: InterpreterContext;
 
-  constructor(options: InterpreterOptions, state: InterpreterState) {
+  constructor(
+    private readonly options: InterpreterOptions,
+    state: InterpreterState,
+  ) {
     this.ctx = {
       state,
       fs: options.fs,
@@ -530,8 +534,21 @@ export class Interpreter {
   }
 
   private async executePipeline(node: PipelineNode): Promise<ExecResult> {
-    return executePipelineHelper(this.ctx, node, (cmd, stdin) =>
-      this.executeCommand(cmd, stdin),
+    return executePipelineHelper(
+      this.ctx,
+      node,
+      (cmd, stdin) => this.executeCommand(cmd, stdin),
+      () =>
+        executeStreamingPipeline(
+          this.ctx,
+          node,
+          async (command, state, stdin, stdio) => {
+            // @banned-pattern-ignore: pipeline stages reuse the parent executionScope and isolate only shell state.
+            const interpreter = new Interpreter(this.options, state);
+            interpreter.ctx.stdio = stdio;
+            return interpreter.executeCommand(command, stdin);
+          },
+        ),
     );
   }
 

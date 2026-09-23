@@ -3,7 +3,7 @@ import {
   checkedAdd,
   checkedMultiply,
 } from "../../bounded-builder.js";
-import { utf8ByteLength } from "../../encoding.js";
+import { encodeUtf8ToBytes, utf8ByteLength } from "../../encoding.js";
 import { ExecutionLimitError } from "../../interpreter/errors.js";
 import type {
   ExecResult,
@@ -25,6 +25,7 @@ import type {
  */
 export const seqCommand: RuntimeCommand = {
   name: "seq",
+  streaming: true,
 
   async execute(
     args: string[],
@@ -154,6 +155,30 @@ export const seqCommand: RuntimeCommand = {
       ctx.limits.maxOutputSize,
       ctx.limits.maxStringLength,
     );
+    if (ctx.stdio && !equalizeWidth) {
+      let count = 0;
+      for (
+        let n = first;
+        increment > 0 ? n <= last + 1e-10 : n >= last - 1e-10;
+        n += increment
+      ) {
+        if (count >= ctx.limits.maxLoopIterations) {
+          throw new ExecutionLimitError(
+            `seq: iteration limit exceeded (${ctx.limits.maxLoopIterations})`,
+            "iterations",
+          );
+        }
+        const value =
+          precision > 0 ? n.toFixed(precision) : String(Math.round(n));
+        await ctx.stdio.write(
+          encodeUtf8ToBytes((count > 0 ? separator : "") + value),
+        );
+        count++;
+      }
+      if (count > 0) await ctx.stdio.write(encodeUtf8ToBytes("\n"));
+      return { stdout: "", stderr: "", exitCode: 0 };
+    }
+
     const separatorBytes = utf8ByteLength(separator);
     let projectedOutputBytes = 0;
     let iterations = 0;

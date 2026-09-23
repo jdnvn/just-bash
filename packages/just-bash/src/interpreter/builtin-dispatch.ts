@@ -1,3 +1,4 @@
+import { BrokenPipeError } from "../streams/byte-pipe.js";
 /**
  * Builtin Command Dispatch
  *
@@ -285,6 +286,9 @@ function createRevocableCommandContext(
   const descriptors = Object.getOwnPropertyDescriptors(context);
   Object.assign(descriptors, {
     fs: dataDescriptor(wrapCapability(context.fs)),
+    stdio: dataDescriptor(
+      context.stdio ? wrapCapability(context.stdio) : undefined,
+    ),
     env: dataDescriptor(wrapCapability(context.env)),
     limits: dataDescriptor(Object.freeze({ ...context.limits })),
     exportedEnv: dataDescriptor(
@@ -883,7 +887,9 @@ export async function executeExternalCommand(
       }
     },
     exportedEnv,
+    stdio: ctx.stdio,
     get stdin() {
+      if (ctx.stdio) throw new Error("Streaming commands must read from stdio");
       stdinAccessed = true;
       return effectiveStdin;
     },
@@ -985,6 +991,8 @@ export async function executeExternalCommand(
         (stdinAccessed ? stdin.length : 0),
     };
   } catch (error) {
+    if (error instanceof BrokenPipeError)
+      return { stdout: "", stderr: "", exitCode: 141 };
     // ExecutionLimitError must propagate - these are safety limits
     if (error instanceof ExecutionLimitError) {
       throw error;

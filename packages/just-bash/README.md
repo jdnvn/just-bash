@@ -738,3 +738,39 @@ cat node_modules/bash-tool/dist/AGENTS.md
 ## License
 
 Apache-2.0
+
+### Streaming pipelines (initial implementation)
+
+Simple pipelines containing a streaming command can run concurrently, with a
+64 KiB handoff buffer per pipe. Writes must be awaited: the producer waits for
+the consumer to read each chunk. When a consumer exits early, subsequent writes
+fail with a broken pipe, reflected as status 141 in `PIPESTATUS` and `pipefail`.
+For example, `seq 1000000000 | cat | head -n 1` can stop after producing the first
+line instead of constructing the entire sequence.
+
+Commands opt in with `streaming: true` (also supported by `defineCommand` and
+lazy custom commands). During an eligible pipeline invocation, `ctx.stdio`
+provides `read(): Promise<ByteString | null>` and
+`write(chunk: ByteString): Promise<void>`. A null read means EOF. Both methods
+must be awaited, and a command must finish all I/O before returning. Reading
+`ctx.stdin` while `ctx.stdio` is present throws; `readCommandStdin(ctx)` provides
+a bounded collection helper for implementations that need a complete value.
+Commands must also implement their ordinary `ctx.stdin`/`ExecResult` path for
+standalone invocations and pipelines that are not eligible for streaming.
+Returned stdout is appended after streamed stdout and charged as fresh output;
+stderr remains collected in
+`ExecResult`. The public `Bash.exec()` result remains buffered and subject to its
+output limit.
+
+The initial command support streams plain `cat` stdin, `head` stdin, and `seq`
+without `-w`. Existing bundled commands can participate through a bounded whole-input
+adapter. Custom commands must opt in before any pipeline containing them can stream. File reads and formatting variants retain their existing buffering.
+Pipe reservations share the execution’s live byte budget; final output,
+collected legacy input, transferred input, work, and deadlines remain bounded.
+
+Eligibility is intentionally limited to registered simple commands with literal
+names and static arguments, with at least one streaming command. Assignments,
+expansions, redirections, inherited stdin/descriptors, aliases, shell functions,
+compound commands, shell builtins, `|&`, and `lastpipe` use the existing buffered
+executor. Extending streaming to those paths and migrating further commands are
+follow-up work.

@@ -212,6 +212,23 @@ export function createDefenseAwareCommandContext(
     descriptors,
   ) as RuntimeCommandContext;
 
+  if (ctx.stdio) {
+    wrappedCtx.stdio = {
+      read: wrapFunction(
+        ctx.stdio.read,
+        ctx.requireDefenseContext,
+        component,
+        "stdio.read",
+      ),
+      write: wrapFunction(
+        ctx.stdio.write,
+        ctx.requireDefenseContext,
+        component,
+        "stdio.write",
+      ),
+    };
+  }
+
   if (ctx.exec) {
     wrappedCtx.exec = wrapFunction(
       ctx.exec,

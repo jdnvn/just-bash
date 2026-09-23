@@ -1,3 +1,4 @@
+import type { CommandStdio } from "../streams/command-stdio.js";
 /**
  * Interpreter Types
  */
@@ -467,6 +468,7 @@ export interface ShellArray {
 }
 
 export interface InterpreterContext {
+  stdio?: CommandStdio;
   state: InterpreterState;
   fs: IFileSystem;
   commands: CommandRegistry;
