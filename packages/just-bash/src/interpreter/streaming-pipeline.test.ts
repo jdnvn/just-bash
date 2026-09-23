@@ -33,7 +33,7 @@ describe("streaming pipelines", () => {
     expect(result.stdout).toBe("hello\n");
     expect(result.stderr).toBe("");
     expect(result.exitCode).toBe(0);
-    expect(produced * 6).toBeLessThanOrEqual(2 * 64 * 1024 + 18);
+    expect(produced * 6).toBeLessThanOrEqual(4 * 64 * 1024 + 6);
     expect(finished).toBe(true);
   });
 

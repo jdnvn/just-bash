@@ -10,6 +10,7 @@
  * - Redirections (redirections.ts)
  */
 
+import { combineAbortSignals } from "../abort-signals.js";
 import type {
   ArithmeticCommandNode,
   CommandNode,
@@ -545,6 +546,25 @@ export class Interpreter {
           async (command, state, stdin, stdio, resolved) => {
             // @banned-pattern-ignore: pipeline stages reuse the parent executionScope and isolate only shell state.
             const interpreter = new Interpreter(this.options, state);
+            interpreter.ctx.execFn = async (
+              script,
+              options,
+              stdinAccounted,
+            ) => {
+              const combined = combineAbortSignals(
+                state.signal,
+                options?.signal,
+              );
+              try {
+                return await this.options.exec(
+                  script,
+                  { ...options, signal: combined.signal },
+                  stdinAccounted,
+                );
+              } finally {
+                combined.cleanup();
+              }
+            };
             interpreter.ctx.stdio = stdio;
             const name = command.name?.parts[0];
             interpreter.ctx.pipelineCommand = {

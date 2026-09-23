@@ -830,6 +830,30 @@ export async function executeExternalCommand(
     stdin || ctx.state.groupStdin || "",
   );
   let stdinAccessed = false;
+  let inheritedOutputBytes = 0;
+  const inheritOutput = async <T extends ExecResult>(
+    execution: Promise<T>,
+  ): Promise<T> => {
+    const result = await execution;
+    inheritedOutputBytes +=
+      (result.internalOutputAccounting?.stdout ?? 0) +
+      (result.internalOutputAccounting?.stderr ?? 0);
+    return result;
+  };
+  const exec: NonNullable<RuntimeCommandContext["exec"]> = (script, options) =>
+    ctx.execFn(script, options, false);
+  const execWithInheritedStdin: NonNullable<
+    RuntimeCommandContext["execWithInheritedStdin"]
+  > = (script, options) =>
+    ctx.execFn(
+      script,
+      {
+        ...options,
+        stdin: latin1FromBytes(effectiveStdin),
+        stdinKind: "bytes",
+      },
+      true,
+    );
 
   // Build exported environment for commands that need it (printenv, env, etc.)
   // Most builtins need access to the full env to modify state
@@ -902,17 +926,9 @@ export async function executeExternalCommand(
     executionScope: cmd.internalIsExtension
       ? createCommandExecutionBudget(ctx.executionScope)
       : ctx.executionScope,
-    exec: (script, options) => ctx.execFn(script, options, false),
+    exec: (script, options) => inheritOutput(exec(script, options)),
     execWithInheritedStdin: (script, options) =>
-      ctx.execFn(
-        script,
-        {
-          ...options,
-          stdin: latin1FromBytes(effectiveStdin),
-          stdinKind: "bytes",
-        },
-        true,
-      ),
+      inheritOutput(execWithInheritedStdin(script, options)),
     fetch: ctx.fetch,
     getRegisteredCommands: () => Array.from(ctx.commands.keys()),
     sleep: ctx.sleep,
@@ -929,6 +945,14 @@ export async function executeExternalCommand(
   let revokeOriginalCommandContext = () => {};
   if (originalCommand) {
     const originalContextDescriptors = Object.getOwnPropertyDescriptors(cmdCtx);
+    originalContextDescriptors.exec = {
+      ...originalContextDescriptors.exec,
+      value: exec,
+    };
+    originalContextDescriptors.execWithInheritedStdin = {
+      ...originalContextDescriptors.execWithInheritedStdin,
+      value: execWithInheritedStdin,
+    };
     originalContextDescriptors.executionScope = {
       value: ctx.executionScope,
       enumerable: true,
@@ -951,9 +975,11 @@ export async function executeExternalCommand(
     cmdCtx.origCommand = (originalArgs) => {
       const executeOriginal = () =>
         originalCommand.execute(originalArgs, guardedOriginalCmdCtx);
-      return originalCommand.trusted
-        ? DefenseInDepthBox.runTrustedAsync(executeOriginal)
-        : DefenseInDepthBox.runUntrustedAsync(executeOriginal);
+      return inheritOutput(
+        originalCommand.trusted
+          ? DefenseInDepthBox.runTrustedAsync(executeOriginal)
+          : DefenseInDepthBox.runUntrustedAsync(executeOriginal),
+      );
     };
   }
   const revocable = createRevocableCommandContext(cmdCtx, commandName);
@@ -985,10 +1011,17 @@ export async function executeExternalCommand(
         ctx.state.signal,
       );
 
-    const commandResult = cmd.trusted
+    let commandResult = cmd.trusted
       ? // Trusted host-extension commands may opt in to unrestricted globals.
         await DefenseInDepthBox.runTrustedAsync(runBoundedCommand)
       : await runBoundedCommand();
+    if (ctx.stdio && cmd.internalIsExtension) {
+      commandResult = ctx.executionScope.accountResult(
+        commandResult,
+        commandName,
+        inheritedOutputBytes,
+      );
+    }
     return {
       ...commandResult,
       internalStdinConsumed:

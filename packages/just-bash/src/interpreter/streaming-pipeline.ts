@@ -114,6 +114,12 @@ export async function executeStreamingPipeline(
     });
   }
 
+  if (
+    ctx.executionScope.depthOf(STAGE_DEPTH) + stages.length >
+    MAX_STREAMING_STAGES
+  )
+    return;
+
   const abort = new AbortController();
   const combined = combineAbortSignals(ctx.state.signal, abort.signal);
   const pipes = stages.slice(1).map(() => new BytePipe(ctx.executionScope));
@@ -233,7 +239,7 @@ export async function executeStreamingPipeline(
             rawResult,
             "pipeline",
             stage.extension
-              ? 0
+              ? undefined
               : Math.max(
                   0,
                   ctx.executionScope.outputBytesUsed - outputCheckpoint,

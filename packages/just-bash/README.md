@@ -83,10 +83,13 @@ A pipeline whose stages are all registered commands with static arguments,
 and where at least one stage opts into streaming, runs its stages concurrently
 through 64 KiB pipes with backpressure. A consumer that returns early (`head`)
 ends its producer: later writes fail with a broken pipe, reported as status 141
-in `PIPESTATUS` and under `pipefail`, matching bash. `cat`, `head`, and `seq`
-stream. Everything else, including builtins, functions, redirections, `|&`, and
-`lastpipe`, keeps the buffered executor, and `Bash.exec()` still returns a
-complete result bounded by `maxOutputSize`.
+in `PIPESTATUS` and under `pipefail`, matching bash. Plain `cat` and `head`
+stream standard input, and `seq` streams unless `-w` is used. Other registered
+commands can participate through a bounded buffering adapter. Pipelines with
+builtins, functions, redirections, `|&`, or `lastpipe` keep the buffered
+executor, as do pipelines that would exceed 64 active streaming stages across
+nested executions. `Bash.exec()` still returns a complete result bounded by
+`maxOutputSize`.
 
 Custom commands opt in with `defineCommand(name, execute, { streaming: true })`
 (or `streaming: true` on a lazy command). Inside an eligible pipeline
