@@ -1,4 +1,3 @@
-import type { StreamingPipelineResult } from "./streaming-pipeline.js";
 /**
  * Pipeline Execution
  *
@@ -17,6 +16,7 @@ import type { ExecResult } from "../types.js";
 import { BadSubstitutionError, ErrexitError, ExitError } from "./errors.js";
 import { clearArray, cloneArrays, setArrayElement } from "./helpers/array.js";
 import { OK } from "./helpers/result.js";
+import type { StreamingPipelineResult } from "./streaming-pipeline.js";
 import type { InterpreterContext } from "./types.js";
 
 /**

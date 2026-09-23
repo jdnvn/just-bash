@@ -2,4 +2,4 @@
 "just-bash": minor
 ---
 
-Add an initial bounded streaming path for simple command pipelines, with chunked command I/O, backpressure, early consumer cancellation, stdin streaming for cat and head, incremental seq output, and incremental single-path rg discovery and search output. Complex shell syntax and unmigrated command implementations retain their existing buffering.
+Run simple command pipelines concurrently with bounded pipes and backpressure when a stage opts into streaming, so a consumer that exits early stops its producer. `cat`, `head`, and `seq` stream; custom commands opt in with `streaming: true` and read and write through `ctx.stdio`.

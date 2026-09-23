@@ -77,6 +77,27 @@ in a terminable worker or process. Tests that invoke command objects directly
 can use `createCommandContext({ fs })` to get a fully resolved context without
 duplicating internal defaults.
 
+### Streaming pipelines
+
+A pipeline whose stages are all registered commands with static arguments,
+and where at least one stage opts into streaming, runs its stages concurrently
+through 64 KiB pipes with backpressure. A consumer that returns early (`head`)
+ends its producer: later writes fail with a broken pipe, reported as status 141
+in `PIPESTATUS` and under `pipefail`, matching bash. `cat`, `head`, and `seq`
+stream. Everything else, including builtins, functions, redirections, `|&`, and
+`lastpipe`, keeps the buffered executor, and `Bash.exec()` still returns a
+complete result bounded by `maxOutputSize`.
+
+Custom commands opt in with `defineCommand(name, execute, { streaming: true })`
+(or `streaming: true` on a lazy command). Inside an eligible pipeline
+`ctx.stdio` is set: `read()` resolves the next chunk or `null` at EOF, and
+`write(chunk)` resolves once the pipe has room. Both must be awaited, and all
+I/O must finish before the command returns. Reading `ctx.stdin` while
+`ctx.stdio` is present throws; use `readCommandStdin(ctx)` when the command
+needs the whole input, which collects it under the shared live-byte budget.
+A streaming command must still handle `ctx.stdin` for standalone invocations
+and buffered pipelines.
+
 <details>
 <summary><h2>Supported Commands</h2></summary>
 
@@ -738,54 +759,3 @@ cat node_modules/bash-tool/dist/AGENTS.md
 ## License
 
 Apache-2.0
-
-### Streaming pipelines (initial implementation)
-
-Simple pipelines containing a streaming command can run concurrently, with a
-64 KiB buffer per pipe. Writes must be awaited: data is accepted until the buffer
-fills, after which the producer waits for the consumer to free space. When a consumer exits early, subsequent writes
-fail with a broken pipe, reflected as status 141 in `PIPESTATUS` and `pipefail`.
-For example, `seq 1000000000 | cat | head -n 1` can stop after producing the first
-line instead of constructing the entire sequence.
-
-Commands opt in with `streaming: true` (also supported by `defineCommand` and
-lazy custom commands). During an eligible pipeline invocation, `ctx.stdio`
-provides `read(): Promise<ByteString | null>` and
-`write(chunk: ByteString): Promise<void>`. A null read means EOF. Both methods
-must be awaited, and a command must finish all I/O before returning. Reading
-`ctx.stdin` while `ctx.stdio` is present throws; `readCommandStdin(ctx)` provides
-a bounded collection helper, backed by `ctx.stdio.readAll()`, for implementations
-that need a complete value. Collected input remains reserved against the shared
-live byte budget until the command finishes.
-Commands must also implement their ordinary `ctx.stdin`/`ExecResult` path for
-standalone invocations and pipelines that are not eligible for streaming.
-Returned stdout is appended after streamed stdout and charged as fresh output;
-stderr remains collected in
-`ExecResult`. The public `Bash.exec()` result remains buffered and subject to its
-output limit.
-
-The initial command support streams plain `cat` stdin, `head` stdin, and `seq`
-without `-w`. For a single search path (including the default current directory),
-`rg` discovers files incrementally and writes one file’s results at a time. This
-lets `rg --files --hidden /mnt/Home | head -4` stop directory traversal and
-`rg -l pattern /mnt/Home | head -200` stop reading further files. Path ordering,
-ignore rules, and file filters are preserved. Some read-ahead can occur before
-the closed pipe is observed.
-
-`rg` still buffers each directory listing and each searched file. Searches with
-multiple paths, `--json`, `--stats`, or combined `--quiet --files-without-match`
-retain the existing collection path; searching stdin also buffers its input.
-Existing bundled commands can participate through a bounded whole-input adapter.
-Custom commands must opt in before any pipeline containing them can stream.
-Other file reads and formatting variants retain their existing buffering.
-Pipe reservations share the execution’s live byte budget; final output,
-collected legacy input, transferred input, work, and deadlines remain bounded.
-
-Eligibility is intentionally limited to registered simple commands with literal
-names and static arguments, with at least one streaming command. Assignments,
-expansions, redirections, inherited stdin/descriptors, aliases, shell functions,
-compound commands, shell builtins, `|&`, and `lastpipe` use the existing buffered
-executor. Pipelines longer than 64 stages also use the buffered executor, and
-nested executions share a ceiling of 64 active streaming stages. Command budgets
-are checked before any stage starts. Extending streaming to those paths and migrating further commands are
-follow-up work.

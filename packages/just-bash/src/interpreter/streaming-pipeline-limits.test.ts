@@ -76,12 +76,13 @@ describe("streaming pipeline admission", () => {
     expect(streaming).toBe(false);
   });
 
-  it("shares stage admission across nested executions", async () => {
-    let started = 0;
+  it("falls back to buffered execution once nested stages reach the cap", async () => {
+    const modes: boolean[] = [];
     const command = defineCommand(
       "nested",
       async (_args, ctx) => {
-        started++;
+        modes.push(ctx.stdio !== undefined);
+        if (modes.length >= 40) return { stdout: "", stderr: "", exitCode: 0 };
         if (!ctx.exec) throw new Error("Missing exec");
         return ctx.exec("nested | cat", { cwd: ctx.cwd });
       },
@@ -90,11 +91,10 @@ describe("streaming pipeline admission", () => {
     const result = await new Bash({ customCommands: [command] }).exec(
       "nested | cat",
     );
-    expect(result.exitCode).toBe(126);
-    expect(result.stderr).toMatch(
-      /pipeline stages: maximum depth \(64\) exceeded/,
-    );
-    expect(started).toBe(32);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(modes).toEqual([...Array(32).fill(true), ...Array(8).fill(false)]);
   });
 });
 

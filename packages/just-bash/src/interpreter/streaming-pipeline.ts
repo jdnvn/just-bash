@@ -28,6 +28,7 @@ import { beginIsolatedShellState } from "./state-transaction.js";
 import type { InterpreterContext, InterpreterState } from "./types.js";
 
 const MAX_STREAMING_STAGES = 64;
+const STAGE_DEPTH = "streaming pipeline stages";
 
 function isStaticPart(part: WordPart): boolean {
   return (
@@ -56,7 +57,8 @@ export async function executeStreamingPipeline(
 ): Promise<StreamingPipelineResult | undefined> {
   if (
     node.commands.length < 2 ||
-    node.commands.length > MAX_STREAMING_STAGES ||
+    ctx.executionScope.depthOf(STAGE_DEPTH) + node.commands.length >
+      MAX_STREAMING_STAGES ||
     node.pipeStderr?.some(Boolean) ||
     ctx.state.shoptOptions.lastpipe ||
     ctx.state.shoptOptions.expand_aliases ||
@@ -135,7 +137,7 @@ export async function executeStreamingPipeline(
       const count = ctx.executionScope.chargeCommand();
       stageLeases.push(
         ctx.executionScope.enterDepth(
-          "streaming pipeline stages",
+          STAGE_DEPTH,
           MAX_STREAMING_STAGES,
           "pipeline stages",
         ),

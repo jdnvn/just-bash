@@ -1,14 +1,13 @@
+import { describe, expect, it } from "vitest";
+import { Bash } from "../Bash.js";
+import { defineCommand } from "../custom-commands.js";
+import { encodeUtf8ToBytes, unsafeBytesFromLatin1 } from "../encoding.js";
 import type { RuntimeCommandContext } from "../types.js";
 
 function stdio(ctx: RuntimeCommandContext) {
   if (!ctx.stdio) throw new Error("Expected streaming I/O");
   return ctx.stdio;
 }
-
-import { describe, expect, it } from "vitest";
-import { Bash } from "../Bash.js";
-import { defineCommand } from "../custom-commands.js";
-import { encodeUtf8ToBytes, unsafeBytesFromLatin1 } from "../encoding.js";
 
 describe("streaming pipelines", () => {
   it("stops an unfinished producer when head has enough input", async () => {

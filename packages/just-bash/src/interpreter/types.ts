@@ -1,4 +1,3 @@
-import type { CommandStdio } from "../streams/command-stdio.js";
 /**
  * Interpreter Types
  */
@@ -13,6 +12,7 @@ import type { ExecutionScope } from "../execution-scope.js";
 import type { IFileSystem } from "../fs/interface.js";
 import type { ExecutionLimits } from "../limits.js";
 import type { SecureFetch } from "../network/index.js";
+import type { CommandStdio } from "../streams/command-stdio.js";
 import type {
   CommandExecOptions,
   CommandRegistry,

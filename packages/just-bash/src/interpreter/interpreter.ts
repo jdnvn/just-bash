@@ -1,4 +1,3 @@
-import { executeStreamingPipeline } from "./streaming-pipeline.js";
 /**
  * Interpreter - AST Execution Engine
  *
@@ -104,6 +103,7 @@ import {
   withPreparedRedirections,
 } from "./redirections.js";
 import { processAssignments } from "./simple-command-assignments.js";
+import { executeStreamingPipeline } from "./streaming-pipeline.js";
 import {
   executeGroup as executeGroupHelper,
   executeSubshell as executeSubshellHelper,

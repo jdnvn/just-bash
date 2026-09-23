@@ -1,4 +1,3 @@
-import { BrokenPipeError } from "../streams/byte-pipe.js";
 /**
  * Builtin Command Dispatch
  *
@@ -20,6 +19,7 @@ import {
   SecurityViolationError,
 } from "../security/defense-in-depth-box.js";
 import { _Proxy } from "../security/trusted-globals.js";
+import { BrokenPipeError } from "../streams/byte-pipe.js";
 import { _clearFiniteTimeout, _setTimeoutIfFinite } from "../timers.js";
 import type {
   ExecResult,
