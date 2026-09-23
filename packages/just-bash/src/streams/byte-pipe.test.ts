@@ -5,6 +5,27 @@ import { resolveLimits } from "../limits.js";
 import { BrokenPipeError, BytePipe } from "./byte-pipe.js";
 
 describe("BytePipe", () => {
+  it("accepts writes up to capacity before a consumer starts reading", async () => {
+    const scope = new ExecutionScope(resolveLimits({ maxLiveBytes: 4 }));
+    const pipe = new BytePipe(scope, 4);
+    await pipe.write(unsafeBytesFromLatin1("ab"));
+    await pipe.write(unsafeBytesFromLatin1("cd"));
+    expect(scope.remainingLiveBytes).toBe(0);
+    pipe.end();
+    expect(await pipe.read()).toBe(unsafeBytesFromLatin1("abcd"));
+    expect(await pipe.read()).toBeNull();
+    expect(scope.remainingLiveBytes).toBe(4);
+  });
+
+  it("rejects a pending write when the pipe ends", async () => {
+    const pipe = new BytePipe(new ExecutionScope(resolveLimits()), 1);
+    const writing = pipe.write(unsafeBytesFromLatin1("ab"));
+    pipe.end();
+    await expect(writing).rejects.toBeInstanceOf(BrokenPipeError);
+    expect(await pipe.read()).toBe(unsafeBytesFromLatin1("a"));
+    expect(await pipe.read()).toBeNull();
+  });
+
   it("splits writes and releases reservations as the consumer reads", async () => {
     const scope = new ExecutionScope(resolveLimits({ maxLiveBytes: 4 }));
     const pipe = new BytePipe(scope, 4);
@@ -53,12 +74,13 @@ describe("BytePipe", () => {
   });
 
   it("rejects concurrent writes instead of accumulating pending chunks", async () => {
-    const pipe = new BytePipe(new ExecutionScope(resolveLimits()));
-    const writing = pipe.write(unsafeBytesFromLatin1("a"));
-    await expect(pipe.write(unsafeBytesFromLatin1("b"))).rejects.toThrow(
+    const pipe = new BytePipe(new ExecutionScope(resolveLimits()), 1);
+    const writing = pipe.write(unsafeBytesFromLatin1("ab"));
+    await expect(pipe.write(unsafeBytesFromLatin1("c"))).rejects.toThrow(
       "Pipe writes must be awaited",
     );
     expect(await pipe.read()).toBe(unsafeBytesFromLatin1("a"));
+    expect(await pipe.read()).toBe(unsafeBytesFromLatin1("b"));
     await writing;
   });
 

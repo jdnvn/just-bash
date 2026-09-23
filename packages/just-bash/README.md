@@ -742,8 +742,8 @@ Apache-2.0
 ### Streaming pipelines (initial implementation)
 
 Simple pipelines containing a streaming command can run concurrently, with a
-64 KiB handoff buffer per pipe. Writes must be awaited: the producer waits for
-the consumer to read each chunk. When a consumer exits early, subsequent writes
+64 KiB buffer per pipe. Writes must be awaited: data is accepted until the buffer
+fills, after which the producer waits for the consumer to free space. When a consumer exits early, subsequent writes
 fail with a broken pipe, reflected as status 141 in `PIPESTATUS` and `pipefail`.
 For example, `seq 1000000000 | cat | head -n 1` can stop after producing the first
 line instead of constructing the entire sequence.
@@ -754,7 +754,9 @@ provides `read(): Promise<ByteString | null>` and
 `write(chunk: ByteString): Promise<void>`. A null read means EOF. Both methods
 must be awaited, and a command must finish all I/O before returning. Reading
 `ctx.stdin` while `ctx.stdio` is present throws; `readCommandStdin(ctx)` provides
-a bounded collection helper for implementations that need a complete value.
+a bounded collection helper, backed by `ctx.stdio.readAll()`, for implementations
+that need a complete value. Collected input remains reserved against the shared
+live byte budget until the command finishes.
 Commands must also implement their ordinary `ctx.stdin`/`ExecResult` path for
 standalone invocations and pipelines that are not eligible for streaming.
 Returned stdout is appended after streamed stdout and charged as fresh output;
@@ -767,8 +769,8 @@ without `-w`. For a single search path (including the default current directory)
 `rg` discovers files incrementally and writes one file’s results at a time. This
 lets `rg --files --hidden /mnt/Home | head -4` stop directory traversal and
 `rg -l pattern /mnt/Home | head -200` stop reading further files. Path ordering,
-ignore rules, and file filters are preserved. A file search may read one extra
-file before the closed pipe is observed.
+ignore rules, and file filters are preserved. Some read-ahead can occur before
+the closed pipe is observed.
 
 `rg` still buffers each directory listing and each searched file. Searches with
 multiple paths, `--json`, `--stats`, or combined `--quiet --files-without-match`
@@ -783,5 +785,7 @@ Eligibility is intentionally limited to registered simple commands with literal
 names and static arguments, with at least one streaming command. Assignments,
 expansions, redirections, inherited stdin/descriptors, aliases, shell functions,
 compound commands, shell builtins, `|&`, and `lastpipe` use the existing buffered
-executor. Extending streaming to those paths and migrating further commands are
+executor. Pipelines longer than 64 stages also use the buffered executor, and
+nested executions share a ceiling of 64 active streaming stages. Command budgets
+are checked before any stage starts. Extending streaming to those paths and migrating further commands are
 follow-up work.

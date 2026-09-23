@@ -12,7 +12,7 @@ export class BrokenPipeError extends Error {
 }
 
 export class BytePipe {
-  private chunk: ByteString | null = null;
+  private buffer = "";
   private lease?: ResourceLease;
   private ended = false;
   private failure: unknown;
@@ -36,24 +36,29 @@ export class BytePipe {
     try {
       this.assertWritable();
       const value = latin1FromBytes(bytes);
-      for (let offset = 0; offset < value.length; offset += this.capacity) {
+      let offset = 0;
+      while (offset < value.length) {
         this.assertWritable();
-        const part = value.slice(offset, offset + this.capacity);
+        if (this.buffer.length === this.capacity) {
+          await new Promise<void>((resolve) => {
+            this.wakeWriter = resolve;
+          });
+          continue;
+        }
+        const length = Math.min(
+          value.length - offset,
+          this.capacity - this.buffer.length,
+        );
+        this.lease?.release();
         this.lease = this.scope.reserveBytes(
           "pipeline",
-          part.length,
+          this.buffer.length + length,
           "pipeline",
         );
-        this.chunk = unsafeBytesFromLatin1(part);
-        const consumed = new Promise<void>((resolve, reject) => {
-          this.wakeWriter = () => {
-            if (this.failed) reject(this.failure);
-            else resolve();
-          };
-        });
+        this.buffer += value.slice(offset, offset + length);
+        offset += length;
         this.wakeReader?.();
         this.wakeReader = undefined;
-        await consumed;
       }
     } finally {
       this.writing = false;
@@ -64,14 +69,15 @@ export class BytePipe {
     if (this.reading) throw new Error("Pipe reads must be awaited");
     this.reading = true;
     try {
-      while (this.chunk === null && !this.ended && !this.failed) {
+      while (this.buffer.length === 0 && !this.ended && !this.failed) {
         await new Promise<void>((resolve) => {
           this.wakeReader = resolve;
         });
       }
       if (this.failed) throw this.failure;
-      const chunk = this.chunk;
-      this.chunk = null;
+      const chunk =
+        this.buffer.length > 0 ? unsafeBytesFromLatin1(this.buffer) : null;
+      this.buffer = "";
       this.lease?.release();
       this.lease = undefined;
       this.wakeWriter?.();
@@ -86,13 +92,15 @@ export class BytePipe {
     this.ended = true;
     this.wakeReader?.();
     this.wakeReader = undefined;
+    this.wakeWriter?.();
+    this.wakeWriter = undefined;
   }
 
   cancel(error: unknown = new BrokenPipeError()): void {
     if (this.failed) return;
     this.failed = true;
     this.failure = error;
-    this.chunk = null;
+    this.buffer = "";
     this.lease?.release();
     this.lease = undefined;
     this.wakeReader?.();

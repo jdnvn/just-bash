@@ -20,6 +20,7 @@ import type {
   FeatureCoverageWriter,
   TraceCallback,
 } from "../types.js";
+import type { ResolveCommandResult } from "./command-resolution.js";
 import type { ProcessSubstitutionEntry } from "./process-substitution.js";
 
 export type InterpreterExecOptions = Omit<CommandExecOptions, "cwd"> & {
@@ -469,6 +470,10 @@ export interface ShellArray {
 
 export interface InterpreterContext {
   stdio?: CommandStdio;
+  pipelineCommand?: {
+    name: string;
+    resolved: Extract<ResolveCommandResult, { cmd: unknown }>;
+  };
   state: InterpreterState;
   fs: IFileSystem;
   commands: CommandRegistry;

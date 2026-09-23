@@ -769,11 +769,16 @@ export async function executeExternalCommand(
   // External commands - resolve via PATH
   // For command -p, use default PATH /usr/bin:/bin instead of $PATH
   const defaultPath = "/usr/bin:/bin";
-  const resolved = await resolveCommandHelper(
-    ctx,
-    commandName,
-    useDefaultPath ? defaultPath : undefined,
-  );
+  const pipelineCommand = ctx.pipelineCommand;
+  ctx.pipelineCommand = undefined;
+  const resolved =
+    pipelineCommand?.name === commandName && !useDefaultPath
+      ? pipelineCommand.resolved
+      : await resolveCommandHelper(
+          ctx,
+          commandName,
+          useDefaultPath ? defaultPath : undefined,
+        );
   if (!resolved) {
     // Check if this is a browser-excluded command for a more helpful error
     if (isBrowserExcludedCommand(commandName)) {

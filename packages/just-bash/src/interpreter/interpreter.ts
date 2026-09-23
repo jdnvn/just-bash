@@ -542,10 +542,15 @@ export class Interpreter {
         executeStreamingPipeline(
           this.ctx,
           node,
-          async (command, state, stdin, stdio) => {
+          async (command, state, stdin, stdio, resolved) => {
             // @banned-pattern-ignore: pipeline stages reuse the parent executionScope and isolate only shell state.
             const interpreter = new Interpreter(this.options, state);
             interpreter.ctx.stdio = stdio;
+            const name = command.name?.parts[0];
+            interpreter.ctx.pipelineCommand = {
+              name: name?.type === "Literal" ? name.value : "",
+              resolved,
+            };
             return interpreter.executeCommand(command, stdin);
           },
         ),

@@ -34,13 +34,13 @@ describe("streaming pipelines", () => {
     expect(result.stdout).toBe("hello\n");
     expect(result.stderr).toBe("");
     expect(result.exitCode).toBe(0);
-    expect(produced).toBeLessThanOrEqual(4);
+    expect(produced * 6).toBeLessThanOrEqual(2 * 64 * 1024 + 18);
     expect(finished).toBe(true);
   });
 
   it("does not materialize seq before running head", async () => {
     const result = await new Bash({
-      executionLimits: { maxOutputSize: 32, maxLoopIterations: 20 },
+      executionLimits: { maxOutputSize: 32, maxLoopIterations: 20_000 },
     }).exec("seq 1000000000 | cat | head -n 1");
     expect(result.stdout).toBe("1\n");
     expect(result.stderr).toBe("");
@@ -257,6 +257,13 @@ describe("streaming pipelines", () => {
       await saved.write(encodeUtf8ToBytes("late"));
     };
     await expect(write()).rejects.toMatchObject({
+      stderr: "bash: producer used its context after cancellation\n",
+    });
+    const readAll = async () => {
+      if (!saved) throw new Error("Missing captured stdio");
+      return saved.readAll();
+    };
+    await expect(readAll()).rejects.toMatchObject({
       stderr: "bash: producer used its context after cancellation\n",
     });
   });

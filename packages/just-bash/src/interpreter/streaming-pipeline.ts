@@ -8,6 +8,7 @@ import {
   type ByteString,
   latin1FromBytes,
   stdoutAsBytes,
+  unsafeBytesFromLatin1,
 } from "../encoding.js";
 import { ExecutionOutputAccumulator } from "../execution-output.js";
 import {
@@ -17,11 +18,16 @@ import {
 import { BrokenPipeError, BytePipe } from "../streams/byte-pipe.js";
 import type { CommandStdio } from "../streams/command-stdio.js";
 import type { ExecResult } from "../types.js";
-import { resolveCommand } from "./command-resolution.js";
+import {
+  type ResolveCommandResult,
+  resolveCommand,
+} from "./command-resolution.js";
 import { ExecutionAbortedError, ExecutionLimitError } from "./errors.js";
 import { SHELL_BUILTINS } from "./helpers/shell-constants.js";
 import { beginIsolatedShellState } from "./state-transaction.js";
 import type { InterpreterContext, InterpreterState } from "./types.js";
+
+const MAX_STREAMING_STAGES = 64;
 
 function isStaticPart(part: WordPart): boolean {
   return (
@@ -44,11 +50,13 @@ export async function executeStreamingPipeline(
     node: SimpleCommandNode,
     state: InterpreterState,
     stdin: string,
-    stdio?: CommandStdio,
+    stdio: CommandStdio | undefined,
+    resolved: Extract<ResolveCommandResult, { cmd: unknown }>,
   ) => Promise<ExecResult>,
 ): Promise<StreamingPipelineResult | undefined> {
   if (
     node.commands.length < 2 ||
+    node.commands.length > MAX_STREAMING_STAGES ||
     node.pipeStderr?.some(Boolean) ||
     ctx.state.shoptOptions.lastpipe ||
     ctx.state.shoptOptions.expand_aliases ||
@@ -59,11 +67,7 @@ export async function executeStreamingPipeline(
   )
     return;
 
-  const stages: Array<{
-    node: SimpleCommandNode;
-    streaming: boolean;
-    extension: boolean;
-  }> = [];
+  const candidates: Array<{ node: SimpleCommandNode; name: string }> = [];
   for (const command of node.commands) {
     if (
       command.type !== "SimpleCommand" ||
@@ -76,22 +80,46 @@ export async function executeStreamingPipeline(
       return;
     const name = command.name.parts[0].value;
     if (SHELL_BUILTINS.has(name) || ctx.state.functions.has(name)) return;
-    const resolved = await resolveCommand(ctx, name);
+    const registered = ctx.commands.get(name.split("/").pop() ?? name);
+    if (
+      !registered ||
+      (registered.internalIsExtension && !registered.streaming)
+    )
+      return;
+    candidates.push({ node: command, name });
+  }
+  if (
+    !candidates.some(
+      ({ name }) => ctx.commands.get(name.split("/").pop() ?? name)?.streaming,
+    )
+  )
+    return;
+
+  const stages: Array<{
+    node: SimpleCommandNode;
+    streaming: boolean;
+    extension: boolean;
+    resolved: Extract<ResolveCommandResult, { cmd: unknown }>;
+  }> = [];
+  for (const candidate of candidates) {
+    const resolved = await resolveCommand(ctx, candidate.name);
     if (!resolved || !("cmd" in resolved)) return;
-    if (resolved.cmd.internalIsExtension && !resolved.cmd.streaming) return;
     stages.push({
-      node: command,
+      node: candidate.node,
       streaming: resolved.cmd.streaming === true,
       extension: resolved.cmd.internalIsExtension === true,
+      resolved,
     });
   }
-  if (!stages.some((stage) => stage.streaming)) return;
 
   const abort = new AbortController();
   const combined = combineAbortSignals(ctx.state.signal, abort.signal);
   const pipes = stages.slice(1).map(() => new BytePipe(ctx.executionScope));
   const output = new ExecutionOutputAccumulator(ctx.executionScope, "pipeline");
+  let cancelled = false;
   const cancel = (error: unknown) => {
+    if (cancelled) return;
+    cancelled = true;
     for (const pipe of pipes) pipe.cancel(error);
   };
   const onAbort = () =>
@@ -100,8 +128,20 @@ export async function executeStreamingPipeline(
   if (combined.signal?.aborted) onAbort();
   let failure: unknown;
   let failed = false;
+  const stageLeases: ResourceLease[] = [];
 
   try {
+    const commandCounts = stages.map(() => {
+      const count = ctx.executionScope.chargeCommand();
+      stageLeases.push(
+        ctx.executionScope.enterDepth(
+          "streaming pipeline stages",
+          MAX_STREAMING_STAGES,
+          "pipeline stages",
+        ),
+      );
+      return count;
+    });
     const results = await Promise.all(
       stages.map(async (stage, index): Promise<ExecResult> => {
         const state = { ...ctx.state };
@@ -112,6 +152,29 @@ export async function executeStreamingPipeline(
         const next = pipes[index];
         let inputLease: ResourceLease | undefined;
         let inputBytes = 0;
+        let bufferedInputBytes = 0;
+        const collectInput = async (limit: number): Promise<string> => {
+          let content = "";
+          for (;;) {
+            const chunk = await stdio.read();
+            if (chunk === null) return content;
+            const value = latin1FromBytes(chunk);
+            if (value.length > limit - content.length) {
+              throw new ExecutionLimitError(
+                "pipeline: buffered input size limit exceeded",
+                "string_length",
+              );
+            }
+            inputLease?.release();
+            inputLease = ctx.executionScope.reserveBytes(
+              "pipeline input",
+              bufferedInputBytes + value.length,
+              "pipeline",
+            );
+            bufferedInputBytes += value.length;
+            content += value;
+          }
+        };
         const stdio: CommandStdio = {
           read: async () => {
             const chunk = input ? await input.read() : null;
@@ -126,6 +189,12 @@ export async function executeStreamingPipeline(
             }
             return chunk;
           },
+          readAll: async () =>
+            unsafeBytesFromLatin1(
+              await collectInput(
+                Math.min(ctx.limits.maxStringLength, ctx.limits.maxInputBytes),
+              ),
+            ),
           write: async (chunk: ByteString) => {
             ctx.executionScope.consumeWork(1, "pipeline");
             if (latin1FromBytes(chunk).length > ctx.limits.maxStringLength) {
@@ -139,43 +208,34 @@ export async function executeStreamingPipeline(
           },
         };
         try {
-          state.commandCount = ctx.executionScope.chargeCommand();
-          let stdin = "";
-          if (!stage.streaming && input) {
-            const limit = Math.min(
-              ctx.limits.maxStringLength,
-              ctx.limits.maxInputBytes,
-              ctx.limits.maxOutputSize,
-            );
-            for (;;) {
-              const chunk = await stdio.read();
-              if (chunk === null) break;
-              const value = latin1FromBytes(chunk);
-              if (value.length > limit - stdin.length) {
-                throw new ExecutionLimitError(
-                  "pipeline: buffered input size limit exceeded",
-                  "string_length",
-                );
-              }
-              inputLease?.release();
-              inputLease = ctx.executionScope.reserveBytes(
-                "pipeline input",
-                stdin.length + value.length,
-                "pipeline",
-              );
-              stdin += value;
-            }
-          }
+          state.commandCount = commandCounts[index];
+          const stdin =
+            !stage.streaming && input
+              ? await collectInput(
+                  Math.min(
+                    ctx.limits.maxStringLength,
+                    ctx.limits.maxInputBytes,
+                    ctx.limits.maxOutputSize,
+                  ),
+                )
+              : "";
+          const outputCheckpoint = ctx.executionScope.outputBytesUsed;
           const rawResult = await execute(
             stage.node,
             state,
             stdin,
             stage.streaming ? stdio : undefined,
+            stage.resolved,
           );
           const result = ctx.executionScope.accountResult(
             rawResult,
             "pipeline",
-            stage.extension ? 0 : undefined,
+            stage.extension
+              ? 0
+              : Math.max(
+                  0,
+                  ctx.executionScope.outputBytesUsed - outputCheckpoint,
+                ),
           );
           output.append(
             "stderr",
@@ -220,6 +280,7 @@ export async function executeStreamingPipeline(
       statuses,
     };
   } finally {
+    for (const lease of stageLeases) lease.release();
     cancel(new BrokenPipeError());
     combined.signal?.removeEventListener("abort", onAbort);
     combined.cleanup();

@@ -23,6 +23,10 @@ describe("Streaming pipelines - Real Bash Comparison", () => {
     "printf 'héllo\\nworld\\n' | cat | head -n 1",
     "! seq 3 | cat",
     "seq 3 | cat; echo ${PIPESTATUS[*]}",
+    "set -o pipefail; seq 2 | head -n 1; echo $?:${PIPESTATUS[*]}",
+    "set -o pipefail; seq 5 | head -n 2; echo $?:${PIPESTATUS[*]}",
+    "set -euo pipefail; seq 5 | head -n 2; echo survived",
+    "set -o pipefail; seq 100 | head -n 1; echo $?:${PIPESTATUS[*]}",
   ]) {
     it(command, async () => {
       const bash = await setupFiles(testDir, {});

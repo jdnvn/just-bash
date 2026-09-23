@@ -220,6 +220,12 @@ export function createDefenseAwareCommandContext(
         component,
         "stdio.read",
       ),
+      readAll: wrapFunction(
+        ctx.stdio.readAll,
+        ctx.requireDefenseContext,
+        component,
+        "stdio.readAll",
+      ),
       write: wrapFunction(
         ctx.stdio.write,
         ctx.requireDefenseContext,
